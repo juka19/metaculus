@@ -1,0 +1,13 @@
+To-Dos:
+
+1. Ground Truth 
+2. Community Prediction (letzter Prediction Wert, bzw. September 2021, Ender der Trainingsdaten Language Model)
+3. Berechnung der Differenz von Community & Ground Truth und Model-Output
+4. Prompt Engineering:
+	a) Parse question type (binary, date, price, counts, etc.) from API output and adapt prompt for each category to optimize model output
+5. Prediction von Community ground truth auf basis von der Prediction Zeitreihe (R-API)
+6. Zeitreihe von R-API Output cleanen
+7. Modellierung Time series mit Bayes?
+8. Conditional Probability Fragen modellieren??
+9. Kontextinformationen der Fragen abgreifen, (Hintergrundinformationen, Kategorie, etc.)
+10. Email für API-Vollzugriff
