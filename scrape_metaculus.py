@@ -1,25 +1,29 @@
 import os
 from multiprocessing import cpu_count
-from multiprocessing.pool import ThreadPool as Pool
 import random
 import time
 import pickle
 import sqlite3
 import itertools
+import logging
+import concurrent.futures
 
 from fp.fp import FreeProxy
+from fp.errors import FreeProxyException
 import pandas as pd
+from regex import E
 from selenium import webdriver
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, InvalidArgumentException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.proxy import Proxy, ProxyType
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select, WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
 
 options = Options()
-# options.add_argument('--headless') # headless mode (kein Browserfenster)
+options.add_argument('--headless') # headless mode (kein Browserfenster)
 # options.add_argument('--no-sandbox')
 # options.add_argument("--disable-gpu")
 # prefs = {'download.default_directory' : os.getcwd(), 'profile.default_content_settings.popups': 0}
@@ -31,85 +35,115 @@ options.add_argument('--disable-blink-features=AutomationControlled')
 options.add_argument("window-size=1280,800")
 options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36")
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', filemode='w', filename='scrape_metaculus2.log')
 
-def scrape_question(q, forecast_type):
-    """Funktion zum Scrapen der Fragen von Metaculus. Die Fragen werden in den Ordner heruntergeladen, in dem sich auch dieses Skript befindet.
+def scrape2(q, forecast_type):
+    xyc = True
+    prox_list = FreeProxy().get_proxy_list(3)
+    while xyc:
+        prox = prox_list.pop()
+        
+        try:
+            options.add_argument(f'--proxy-server={prox}')
+            
+            driver = webdriver.Chrome(options=options)
+            driver.get(q)
+            
+            assert len(driver.find_elements(By.CLASS_NAME, 'question_card__resolution.ml-auto.ng-binding')) > 0
+            
+            xyc = False
+        except Exception as e:
+            continue
+            
+    logging.info(f"Scraping {q}")
     
-    Args:
-        q (int): Nummer der Frage, die heruntergeladen werden soll.
-    """
-    prox = FreeProxy(country_id=['US'], rand=True).get()
+    resolved = driver.find_element(By.CLASS_NAME, 'question_card__resolution.ml-auto.ng-binding').text
     
-    webdriver.DesiredCapabilities.CHROME['proxy'] = {
-        'httpProxy':prox,
-        'ftpProxy':prox,
-        'sslProxy':prox,
-        'proxyType':'MANUAL',
-    }
-    
-    driver = webdriver.Chrome(options=options)
-    driver.get(q)
-    
-    try: # pop-up wegklicken
-        resolved = driver.find_element(By.CLASS_NAME, 'question_card__resolution.ml-auto.ng-binding').text
-        title = driver.find_element(By.XPATH, '/html/body/div[2]/div[2]/div[1]/div[1]/h1').text
+    try:
+        title = driver.find_element(By.XPATH, '/html/body/div/div[2]/div[1]/div[1]/h1').text
         n_predictions = driver.find_element(By.XPATH, '/html/body/div[2]/div[2]/div[1]/div[1]/div/div/div[2]/div/span[1]').text
         n_forecasters = driver.find_element(By.XPATH, '/html/body/div[2]/div[2]/div[1]/question-timeseries-group/div/question-timeseries-section/div/div/div[1]/div/span[2]').text
         metaculus_pred = driver.find_element(By.XPATH, '/html/body/div[2]/div[2]/div[1]/question-timeseries-group/div/question-timeseries-section/div/div/div[2]/div/span/span').text
-        
-        try:
-            driver.find_element(By.XPATH, '/html/body/div[2]/div[2]/div[1]/div[4]/background-info/div/button').click()
-            ps = driver.find_elements(By.XPATH, '/html/body/div[2]/div[2]/div[1]/div[4]/background-info/div/div/div/div/p')
-            text = ''.join([p.text for p in ps])
-        except Exception as e:
-            print(e)
-            text = None
-        
-        try:
-            driver.find_element(By.XPATH, '/html/body/div[2]/div[2]/div[1]/button[2]').click()
+    except Exception as e:
+        logging.warning(e)
+        n_predictions = ''
+        n_forecasters = ''
+        metaculus_pred = ''
+    try:
+        driver.find_element(By.XPATH, '/html/body/div[2]/div[2]/div[1]/div[4]/background-info/div/button').click()
+        ps = driver.find_elements(By.XPATH, '/html/body/div[2]/div[2]/div[1]/div[4]/background-info/div/div/div/div/p')
+        text = ''.join([p.text for p in ps])
+    except Exception as e:
+        logging.warning(e)
+        text = ''
+    
+    try:
+        driver.find_element(By.XPATH, '/html/body/div[2]/div[2]/div[1]/button[2]').click()
+        meta_info = driver.find_element(By.XPATH, '/html/body/div[2]/div[2]/div[1]/div[5]/byline/span').text
+        category = driver.find_element(By.XPATH, '/html/body/div[2]/div[2]/div[1]/div[5]/div[1]/a').text
+    except Exception as e:
+        try: 
             meta_info = driver.find_element(By.XPATH, '/html/body/div[2]/div[2]/div[1]/div[5]/byline/span').text
             category = driver.find_element(By.XPATH, '/html/body/div[2]/div[2]/div[1]/div[5]/div[1]/a').text
         except Exception as e:
-            print(e)
-            meta_info = None
-            category = None
-        
+            logging.warning(e)
+            meta_info = ''
+            category = ''
+    
+    try:
+        driver.find_element(By.XPATH, '/html/body/div[2]/div[2]/div[1]/div[6]/related-news/div/div/div/button').click()
+        news_links = driver.find_elements(By.XPATH, '/html/body/div[2]/div[2]/div[1]/div[6]/related-news/div/div/div/div/div[1]/a')
+        news_date = driver.find_elements(By.XPATH, '/html/body/div[2]/div[2]/div[1]/div[6]/related-news/div/div/div/div/div[1]/a/div[2]/div[2]')
+        news = {d.text: n.get_attribute("href") for d, n in zip(news_date, news_links)}
+    except Exception as e:
         try:
-            driver.find_element(By.XPATH, '/html/body/div[2]/div[2]/div[1]/div[6]/related-news/div/div/div/button').click()
             news_links = driver.find_elements(By.XPATH, '/html/body/div[2]/div[2]/div[1]/div[6]/related-news/div/div/div/div/div[1]/a')
             news_date = driver.find_elements(By.XPATH, '/html/body/div[2]/div[2]/div[1]/div[6]/related-news/div/div/div/div/div[1]/a/div[2]/div[2]')
             news = {d.text: n.get_attribute("href") for d, n in zip(news_date, news_links)}
         except Exception as e:
-            print(e)
-            news = None
-            
-        try:
-            time.sleep(1)
-            driver.find_element(By.XPATH, '/html/body/div[2]/div[2]/div[1]/section/resolution-criteria/div/button').click()
-            time.sleep(1)
-            ps = driver.find_elements(By.XPATH, '/html/body/div[2]/div[2]/div[1]/section/resolution-criteria/div/div/div/div/div[1]/p')
-            res_criteria = ''.join([p.text for p in ps])
-        except Exception as e:
-            print(e)
-            res_criteria = None
+            logging.warning(e)
+            news = ''
         
-        
-        return {
-            'resolution': resolved, 'title': title, 'n_predictions': n_predictions, 
-            'n_forecasters': n_forecasters, 'metaculus_pred': metaculus_pred,
-            'url': q, 'text': text, 'meta_info': meta_info, 'category': category,
-            'news': news, 'res_criteria': res_criteria, 'forecast_type': forecast_type
-            }
-    
+    try:
+        time.sleep(1)
+        driver.find_element(By.XPATH, '/html/body/div[2]/div[2]/div[1]/section/resolution-criteria/div/button').click()
+        time.sleep(1)
+        ps = driver.find_elements(By.XPATH, '/html/body/div[2]/div[2]/div[1]/section/resolution-criteria/div/div/div/div/div[1]/p')
+        res_criteria = ''.join([p.text for p in ps])
     except Exception as e:
-        print(e)
-        return None
-
+        logging.warning(e)
+        res_criteria = ''
+    
+    
+    record = {
+        'resolution': [resolved], 'title': [title], 'n_predictions': [n_predictions], 
+        'n_forecasters': [n_forecasters], 'metaculus_pred': [metaculus_pred],
+        'url': [q], 'text': [text], 'meta_info': [meta_info], 'category': [category],
+        'news': [news], 'res_criteria': [res_criteria], 'forecast_type': [forecast_type]
+        }
+    
+    conn = sqlite3.connect("metaculus.db", check_same_thread=False)
+    
+    pd.DataFrame().from_records(record).applymap(str).to_sql('metaculus', conn, if_exists='append')
+    
+    conn.close()
+    
+    logging.info(f"Succsessfully scraped and stored {q}")
+    
+    return record
 
 def scrape_index(forecast_type):
     """Funktion zum Scrapen der Indexseite von Metaculus. Die Fragen werden in den Ordner heruntergeladen, in dem sich auch dieses Skript befindet.
     """
-    prox = FreeProxy(country_id=['US'], rand=True).get()
+    try:
+        prox = FreeProxy(country_id=['US'], rand=True).get()
+    except FreeProxyException:
+        time.sleep(60)
+        try:
+            prox = FreeProxy(rand=True).get()
+        except FreeProxyException:
+            time.sleep(60)
+            prox = FreeProxy(rand=True).get()
     
     webdriver.DesiredCapabilities.CHROME['proxy'] = {
         'httpProxy':prox,
@@ -137,11 +171,6 @@ def scrape_index(forecast_type):
     
     return links
 
-def process_question(args):
-    q, qt, conn = args
-    rec = scrape_question(q, qt)
-    pd.DataFrame(rec, index=[0]).to_sql('metaculus', conn, if_exists='append')
-
 def main():
     Service(ChromeDriverManager().install())
     metaculus_links = {}
@@ -161,19 +190,20 @@ def main():
     with open("metaculus_links.pkl", "wb") as f:
         pickle.dump(metaculus_links, f)
     
-    for qt in q_types:
-        pool = Pool(cpu_count())
-        arg1 = metaculus_links[qt]
-        arg2 = itertools.repeat(qt, len(arg1))
-        arg3 = itertools.repeat(conn, len(arg1))
-        results = pool.map(process_question, itertools.zip_longest(arg1, arg2, arg3))
-        pool.close()
-        pool.join()
-    conn.close()
+    
+    for qt in q_types[0:3]:
+        args = [{'url': q , 'forecast_type': qt} for _, q in enumerate(metaculus_links[qt])]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=cpu_count()) as executor:
+            scraping_tasks = [
+                executor.submit(
+                    scrape2,
+                    mapping['url'],
+                    mapping['forecast_type']
+                )
+                for mapping in args
+            ]
+            concurrent.futures.wait(scraping_tasks)
 
-metaculus_links = pickle.load(open("metaculus_links.pkl", "rb"))
 
 if __name__ == "__main__":
     main()
-    
-    
