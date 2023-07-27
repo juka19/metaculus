@@ -35,7 +35,7 @@ options.add_argument('--disable-blink-features=AutomationControlled')
 options.add_argument("window-size=1280,800")
 options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/74.0.3729.169 Safari/537.36")
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', filemode='w', filename='scrape_metaculus2.log')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', filemode='w', filename='logs/scrape_metaculus.log')
 
 def scrape2(q, forecast_type):
     xyc = True
@@ -114,7 +114,6 @@ def scrape2(q, forecast_type):
         logging.warning(e)
         res_criteria = ''
     
-    
     record = {
         'resolution': [resolved], 'title': [title], 'n_predictions': [n_predictions], 
         'n_forecasters': [n_forecasters], 'metaculus_pred': [metaculus_pred],
@@ -122,7 +121,7 @@ def scrape2(q, forecast_type):
         'news': [news], 'res_criteria': [res_criteria], 'forecast_type': [forecast_type]
         }
     
-    conn = sqlite3.connect("metaculus.db", check_same_thread=False)
+    conn = sqlite3.connect("data/metaculus.db", check_same_thread=False)
     
     pd.DataFrame().from_records(record).applymap(str).to_sql('metaculus', conn, if_exists='append')
     
@@ -169,6 +168,8 @@ def scrape_index(forecast_type):
     t = driver.find_elements(By.XPATH, '//a/div/h4/a')
     links = [x.get_attribute("href") for x in t]
     
+    logging.info(f"Scraped {len(links)} links for forecast type {forecast_type}")
+    
     return links
 
 def main():
@@ -180,14 +181,14 @@ def main():
     for forecast_type in q_types:
         metaculus_links[forecast_type] = scrape_index(forecast_type)
     
-    conn = sqlite3.connect("metaculus.db", check_same_thread=False)
+    conn = sqlite3.connect("data/metaculus.db", check_same_thread=False)
     
     for k in metaculus_links:
         print(k)
         print(len(metaculus_links[k]))
         pd.DataFrame(metaculus_links[k]).to_sql(k, conn, if_exists='replace')
     
-    with open("metaculus_links.pkl", "wb") as f:
+    with open("data/metaculus_links.pkl", "wb") as f:
         pickle.dump(metaculus_links, f)
     
     

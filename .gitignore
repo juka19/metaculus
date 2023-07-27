@@ -152,3 +152,5 @@ cython_debug/
 #.idea/
 
 assets/api_key.txt
+assets/HF_API_TOKEN.txt
+data/metaculus_questions.pkl
