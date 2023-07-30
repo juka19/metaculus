@@ -10,9 +10,15 @@ from langchain.chains import SequentialChain, LLMChain
 from langchain.callbacks import FileCallbackHandler
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+from airflow.operators.bash import BashOperator
 from langchain.schema import prompt_template
+from huggingface_hub import login
 from numpy import random
 import pandas as pd
+
+with open("assets/HF_API_TOKEN.txt", "r") as f:
+    hf_token = f.read()
+login(token=hf_token)
 
 def read_data(sql_path):
     conn = sqlite3.connect(sql_path)
@@ -54,8 +60,6 @@ def get_additional_data(id):
 
 
 def langchain_pipeline(record):
-    with open("assets/HF_API_TOKEN.txt", "r") as f:
-        hf_token = f.read()
     llm = HuggingFaceHub(
         repo_id="tiiuae/falcon-7b-instruct",
         huggingfacehub_api_token=hf_token,
@@ -155,7 +159,7 @@ def langchain_pipeline(record):
         [Expert prediction]:
         """.strip()
         prompt_template = PromptTemplate(
-            input_variables=["agent_descr", "question", "context"],
+            input_variables=["agent_descr", "question", "context", "max", "min"],
             template=template
         )
         
@@ -181,6 +185,8 @@ def langchain_pipeline(record):
 
 data = read_data('data/metaculus.db')
 
+
+
 for _, row in data.iterrows():
     dag_id=f'metaculus_{row["id"]}'
     dag = DAG(
@@ -204,7 +210,6 @@ for _, row in data.iterrows():
             python_callable=langchain_pipeline
         )
         task1 >> task2
-        
 
 import random
 from pprint import pprint
