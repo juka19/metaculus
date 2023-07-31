@@ -2,6 +2,7 @@ import sqlite3
 import urllib.request
 import json
 import re
+import os
 from datetime import datetime, timedelta
 
 from langchain.prompts import PromptTemplate
@@ -15,10 +16,36 @@ from langchain.schema import prompt_template
 from huggingface_hub import login
 from numpy import random
 import pandas as pd
+from cerberus import Validator
 
 with open("assets/HF_API_TOKEN.txt", "r") as f:
     hf_token = f.read()
 login(token=hf_token)
+
+schema = {
+    'id': {'type': 'integer', 'coerce': int},
+    'url': {'type': 'string', 'regex': 'https:\/\/www.metaculus.com\/questions\/\d{3,5}\/.*'},
+    'title': {'type': 'string'},
+    'res_criteria': {'type': 'string'},
+    'resolution': {'type': 'string'},
+    'forecast_type': {'type': 'string', 'allowed': ['binary', 'date_range', 'numerical']},
+    'description': {'type': 'string'},
+    'possibilities': {
+        'type': ['dict', 'string'],
+        'allow_unknown': True,
+        'schema': {
+            'scale': {
+                'type': 'dict',
+                'allow_unknown': True,
+                'schema': {
+                    'max': {'type': 'number'},
+                    'min': {'type': 'number'}
+                }
+            }
+        }
+    }
+}
+v = Validator(schema, allow_unknown=True)
 
 def read_data(sql_path):
     conn = sqlite3.connect(sql_path)
@@ -32,6 +59,10 @@ def read_data(sql_path):
 def remove_markdown_links(text):
     pattern = r'\[(.*?)\]\((.*?)\)'
     return re.sub(pattern, r'\1', text)
+
+def striphtml(data):
+    p = re.compile(r'<.*?>')
+    return p.sub('', data)
 
 def get_additional_data(id):
     endpoint = f'https://www.metaculus.com/api2/questions/{id}/'
@@ -56,21 +87,26 @@ def get_additional_data(id):
         }
     record = {**record, **data[data['id'] == id].to_dict('records')[0]}
     record['description'] = remove_markdown_links(record['description'])
-    return record
-
-
-def langchain_pipeline(record):
-    llm = HuggingFaceHub(
-        repo_id="tiiuae/falcon-7b-instruct",
-        huggingfacehub_api_token=hf_token,
-        model_kwargs={"pad_token_id": 11,
-        "max_length": 5000,
-        "do_sample": True,
-        "top_k": 10,
-        "num_return_sequences": 1,
-        "trust_remote_code": True}
-    )
+    record['description'] = striphtml(record['description']).strip().replace('\n', ' ').replace('\r', '')
     
+    if v.validate(record):
+        return record
+    else:
+        raise ValueError(v.errors)
+
+
+def langchain_pipeline(record, llm=None):
+    if llm is None:
+        llm = HuggingFaceHub(
+            repo_id="tiiuae/falcon-7b-instruct",
+            huggingfacehub_api_token=hf_token,
+            model_kwargs={"pad_token_id": 11,
+            "max_length": 10000,
+            "do_sample": True,
+            "top_k": 10,
+            "num_return_sequences": 1,
+            "trust_remote_code": True}
+        )
     template = """
     For each instruction, write a high-quality description about the most capable and suitable agent to answer the instruction. In second person perspective.
     [Instruction]: Make a list of 5 possible effects of deforestation.
@@ -94,7 +130,7 @@ def langchain_pipeline(record):
         
         template = """
         {agent_descr}
-        Now given above identity background, please answer the following instruction. You are required to answer either Yes or No, nothing else.
+        Now given above identity background, please answer the following instruction. The expert takes all information into consideration and answers this question either with Yes or with No, nothing else.
         Additional context information: {context}
         {question}
         [Expert Prediction]:
@@ -115,8 +151,11 @@ def langchain_pipeline(record):
             input_variables=["question", "context"],
             output_variables=["agent_descr", "answer"]
         )
-        
-        args = {"question": record['title'], "context": record['description']}
+        if record['description'] == '':
+            context = record['res_criteria']
+        else:
+            context = record['description']
+        args = {"question": record['title'], "context": context}
     
     elif record['forecast_type'] == 'date_range':
         
@@ -144,15 +183,18 @@ def langchain_pipeline(record):
             input_variables=["question", "context", "max", "min"],
             output_variables=["agent_descr", "answer"]
         )
-        
-        args = {"question": record['title'], "context": record['description'], 
+        if record['description'] == '':
+            context = record['res_criteria']
+        else:
+            context = record['description']
+        args = {"question": record['title'], "context": context, 
                 "max": record["possibilities"]["scale"]["max"], "min": record["possibilities"]["scale"]["min"]}
     
     elif record['forecast_type'] == 'numerical':
         
         template = """
         {agent_descr}
-        Now given above identity background, please answer the following instruction. You are required to answer with an numerical estimate.
+        Now given above identity background, please answer the following instruction. You are required to answer with an numerical estimate. The expert only answers with the estimated number.
         The maximum number is {max} and the minimum number is {min}.
         Additional context information: {context}
         {question}
@@ -174,18 +216,39 @@ def langchain_pipeline(record):
             input_variables=["question", "context", "max", "min"],
             output_variables=["agent_descr", "answer"]
         )
-        
-        args = {"question": record['title'], "context": record['description'], 
+        if record['description'] == '':
+            context = record['res_criteria']
+        else:
+            context = record['description']
+        args = {"question": record['title'], "context": context, 
                 "max": record["possibilities"]["scale"]["max"], "min": record["possibilities"]["scale"]["min"]}
     
     result = overall_chain(args)
     
     return result
 
+def write_to_json(record):
+    a = []
+    if not os.path.isfile('data/json_output.json'):
+        a.append(record)
+        with open('data/json_output.json', mode='w') as f:
+            f.write(json.dumps(a, indent=2))
+    else:
+        with open('data/json_output.json') as feedsjson:
+            feeds = json.load(feedsjson)
+        feeds.append(record)
+        with open('data/json_output.json', mode='w') as f:
+            f.write(json.dumps(feeds, indent=2))
+
 
 data = read_data('data/metaculus.db')
 
 
+
+llm = HuggingFaceHub(
+    repo_id="meta-llama/Llama-2-7b-chat-hf",
+    huggingfacehub_api_token=hf_token,
+)
 
 for _, row in data.iterrows():
     dag_id=f'metaculus_{row["id"]}'
@@ -207,17 +270,32 @@ for _, row in data.iterrows():
         )
         task2 = PythonOperator(
             task_id='langchain_pipeline',
-            python_callable=langchain_pipeline
+            python_callable=langchain_pipeline,
+            op_kwargs={'llm': llm, 'record': task1.output}
         )
-        task1 >> task2
+        task3 = PythonOperator(
+            task_id='write_to_json',
+            python_callable=write_to_json,
+            op_kwargs={'record': task2.output}
+        )
+        task1 >> task2 >> task3
 
-import random
-from pprint import pprint
 
-t = random.choice(data.id)
 
-x = get_additional_data(t)
+# import random
+# from pprint import pprint
 
-pred = langchain_pipeline(x)
+# llm = HuggingFaceHub(
+#     repo_id="meta-llama/Llama-2-7b-chat-hf",
+#     huggingfacehub_api_token=hf_token,
+# )
 
-pprint(pred)
+# t = random.choice(data.id)
+
+# x = get_additional_data(t)
+
+
+
+# pred = langchain_pipeline(x, llm=llm)
+
+# pprint(pred)
