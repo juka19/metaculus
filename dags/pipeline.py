@@ -17,10 +17,13 @@ from huggingface_hub import login
 from numpy import random
 import pandas as pd
 from cerberus import Validator
+from fp.fp import FreeProxy
+from fp.errors import FreeProxyException
 
-with open("assets/HF_API_TOKEN.txt", "r") as f:
+with open("../../assets/HF_API_TOKEN.txt", "r") as f:
     hf_token = f.read()
-login(token=hf_token)
+
+# hf_token = os.environ['HF_API_TOKEN']
 
 schema = {
     'id': {'type': 'integer', 'coerce': int},
@@ -89,6 +92,9 @@ def get_additional_data(id):
     record['description'] = remove_markdown_links(record['description'])
     record['description'] = striphtml(record['description']).strip().replace('\n', ' ').replace('\r', '')
     
+    return record
+
+def validate_input(record):
     if v.validate(record):
         return record
     else:
@@ -225,25 +231,41 @@ def langchain_pipeline(record, llm=None):
     
     result = overall_chain(args)
     
+    result['id'] = record['id']
+    
     return result
+
+v2 = Validator(
+    {
+        'agent_descr': {'type': 'string'},
+        'answer': {'type': ['string', 'number']},
+        'context': {'type': 'string'},
+        'question': {'type': 'string'},
+        'id': {'type': 'integer'}
+    },
+    allow_unknown=False
+)
+
+def validate_output(output):
+    if v2.validate(output):
+        return output
+    else:
+        raise ValueError(v2.errors)
 
 def write_to_json(record):
     a = []
-    if not os.path.isfile('data/json_output.json'):
+    if not os.path.isfile('../../data/json_output.json'):
         a.append(record)
-        with open('data/json_output.json', mode='w') as f:
+        with open('../../data/json_output.json', mode='w') as f:
             f.write(json.dumps(a, indent=2))
     else:
-        with open('data/json_output.json') as feedsjson:
+        with open('../../data/json_output.json') as feedsjson:
             feeds = json.load(feedsjson)
         feeds.append(record)
-        with open('data/json_output.json', mode='w') as f:
+        with open('../../data/json_output.json', mode='w') as f:
             f.write(json.dumps(feeds, indent=2))
 
-
-data = read_data('data/metaculus.db')
-
-
+data = read_data('../../data/metaculus.db')
 
 llm = HuggingFaceHub(
     repo_id="meta-llama/Llama-2-7b-chat-hf",
@@ -254,7 +276,7 @@ for _, row in data.iterrows():
     dag_id=f'metaculus_{row["id"]}'
     dag = DAG(
         dag_id=dag_id,
-        schedule_interval='@once', # set schedule interval
+        schedule_interval='@once', 
         default_args={
             'owner': 'airflow',
             'retries': 1,
@@ -266,19 +288,30 @@ for _, row in data.iterrows():
     with dag:
         task1 = PythonOperator(
             task_id='get_additional_data',
-            python_callable=get_additional_data
+            python_callable=get_additional_data,
+            op_kwargs={'id': str(row['id'])}
         )
         task2 = PythonOperator(
-            task_id='langchain_pipeline',
-            python_callable=langchain_pipeline,
-            op_kwargs={'llm': llm, 'record': task1.output}
+            task_id='validate_input',
+            python_callable=validate_input,
+            op_kwargs={'record': task1.output}
         )
         task3 = PythonOperator(
+            task_id='langchain_pipeline',
+            python_callable=langchain_pipeline,
+            op_kwargs={'llm': llm, 'record': task2.output}
+        )
+        task4 = PythonOperator(
+            task_id='validate_output',
+            python_callable=validate_output,
+            op_kwargs={'output': task3.output}
+        )
+        task5 = PythonOperator(
             task_id='write_to_json',
             python_callable=write_to_json,
-            op_kwargs={'record': task2.output}
+            op_kwargs={'record': task4.output}
         )
-        task1 >> task2 >> task3
+        task1 >> task2 >> task3 >> task4 >> task5
 
 
 

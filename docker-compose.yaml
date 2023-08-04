@@ -58,12 +58,13 @@ x-airflow-common:
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'true'
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth'
+    HF_API_TOKEN: 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
   volumes:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
-    - ./data:/data
-    - ./assets:/assets
+    - /home/julian/Documents/metaculus/data:/data
+    - /home/julian/Documents/metaculus/assets:/assets
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on
@@ -271,3 +272,5 @@ services:
 
 volumes:
   postgres-db-volume:
+  data:
+  assets:

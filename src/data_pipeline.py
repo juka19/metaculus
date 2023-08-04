@@ -1,4 +1,3 @@
-
 import sqlite3
 import urllib.request
 import json
@@ -60,20 +59,13 @@ task3 = PythonOperator(
 )
 
 
-with DAG(
-    dag_id="metaculus_prep"
-)
 
 
 
 
 
-
-
-
-
-def langchain_pipeline(id):
-
+def langchain_pipeline(record):
+    
 
 
 
