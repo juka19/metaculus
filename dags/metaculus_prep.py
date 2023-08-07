@@ -144,6 +144,7 @@ def langchain_pipeline(record, llm=None):
             huggingfacehub_api_token=hf_token,
             model_kwargs={"pad_token_id": 11,
             "max_length": 10000,
+            "max_tokens": 10000,
             "do_sample": True,
             "top_k": 10,
             "num_return_sequences": 1,
@@ -172,10 +173,10 @@ def langchain_pipeline(record, llm=None):
         
         template = """
         {agent_descr}
-        Now given above identity background, please answer the following instruction. The expert takes all information into consideration and answers this question either with Yes or with No, nothing else.
-        Additional context information: {context}
-        {question}
-        [Expert Prediction]:
+        Given above identity background, please answer the following instruction. The expert takes all information into consideration and answers this question either with Yes or with No, nothing else.
+        [Additional context information]: {context}
+        [Question]: {question}
+        [Expert Prediction (Yes/No)]:
         """.strip()
         prompt_template = PromptTemplate(
             input_variables=["agent_descr", "question", "context"],
@@ -205,9 +206,9 @@ def langchain_pipeline(record, llm=None):
         {agent_descr}
         Now given above identity background, please answer the following instruction. You are required to answer with an exact date estimate in the format of YY-MM-DD.
         The maximum date is {max} and the minimum date is {min}.
-        Additional context information: {context}
-        {question}
-        [Expert prediction]:
+        [Additional context information]: {context}
+        [Question:] {question}
+        [Expert prediction (YY-MM-DD)]:
         """.strip()
         prompt_template = PromptTemplate(
             input_variables=["agent_descr", "question", "context", "max", "min"],
@@ -238,9 +239,9 @@ def langchain_pipeline(record, llm=None):
         {agent_descr}
         Now given above identity background, please answer the following instruction. You are required to answer with an numerical estimate. The expert only answers with the estimated number.
         The maximum number is {max} and the minimum number is {min}.
-        Additional context information: {context}
-        {question}
-        [Expert prediction]:
+        [Additional context information]: {context}
+        [Question]: {question}
+        [Expert prediction (Number)]:
         """.strip()
         prompt_template = PromptTemplate(
             input_variables=["agent_descr", "question", "context", "max", "min"],
@@ -318,11 +319,11 @@ def write_json(data, output_path):
 
 llm = HuggingFaceHub(
     repo_id="meta-llama/Llama-2-7b-chat-hf",
+    model_kwargs={'max_num_batch_tokens':4096},
     huggingfacehub_api_token=hf_token,
 )
 
-
-dag_id=f'metaculus_prep'
+dag_id = f'metaculus_prep'
 dag = DAG(
     dag_id=dag_id,
     schedule_interval='@once', 
@@ -353,7 +354,7 @@ with dag:
     task7 = PythonOperator(
         task_id='write_json_full',
         python_callable=write_json,
-        op_kwargs={'data': task3.output, 'output_path': '../../data/all_data.json'}
+        op_kwargs={'data': task3.output, 'output_path': '../../data/all_data2.json'}
     )
     task4 = PythonOperator(
         task_id='run_langchain_pipeline',
@@ -368,6 +369,6 @@ with dag:
     task6 = PythonOperator(
         task_id='write_json_preds',
         python_callable=write_json,
-        op_kwargs={'data': task5.output, 'output_path': '../../data/json_output.json'}
+        op_kwargs={'data': task5.output, 'output_path': '../../data/json_output2.json'}
     )
     task1 >> task2 >> task3 >> task7 >> task4 >> task5 >> task6
