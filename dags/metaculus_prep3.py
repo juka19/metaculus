@@ -71,8 +71,8 @@ v2 = Validator(
 
 llm = HuggingFaceHub(
     repo_id="meta-llama/Llama-2-7b-chat-hf",
-    model_kwargs={'max_num_batch_tokens':4096},
-    huggingfacehub_api_token=hf_token,
+    model_kwargs={'max_num_batch_tokens':4096, 'max_tokens': 4096},
+    huggingfacehub_api_token=hf_token
 )
 dag_id = f'metaculus_prep3'
 dag = DAG(
